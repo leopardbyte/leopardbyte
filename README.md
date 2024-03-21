@@ -1,4 +1,4 @@
-- 👋 Hi, I’m @leopardbyte
+
 - ⚡ Fun fact: no fun here
 
 <!---
