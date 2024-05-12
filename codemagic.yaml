@@ -1,0 +1,28 @@
+workflows:
+  ios-app-workflow:
+    name: iOS App Workflow
+    max_build_duration: 120
+    instance_type: mac_mini_m1
+    environment:
+      groups:
+        - app_store_credentials # Defined in Codemagic UI
+      xcode: latest
+      cocoapods: default
+    scripts:
+      - name: Install dependencies
+        script: |
+          echo "Install dependencies"
+          pod install
+      - name: Build ipa for distribution
+        script: |
+          echo "Build ipa for distribution"
+          xcodebuild -workspace "YourApp.xcworkspace" -scheme "YourScheme" -sdk iphoneos -configuration Release build -archivePath $CM_BUILD_DIR/YourApp.xcarchive archive | xcpretty
+          xcodebuild -exportArchive -archivePath $CM_BUILD_DIR/YourApp.xcarchive -exportOptionsPlist exportOptions.plist -exportPath $CM_BUILD_DIR
+    artifacts:
+      - build/ios/ipa/*.ipa
+    publishing:
+      app_store_connect:
+        api_key: $APP_STORE_CONNECT_PRIVATE_KEY # Set in Codemagic UI
+        key_id: $APP_STORE_CONNECT_KEY_ID # Set in Codemagic UI
+        issuer_id: $APP_STORE_CONNECT_ISSUER_ID # Set in Codemagic UI
+        submit_to_app_store: true
