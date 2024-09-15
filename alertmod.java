@@ -1,294 +1,415 @@
-package com.example.alertmod;
+package com.example.endermanfinder;
 
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.FontRenderer;
-import net.minecraft.client.network.NetHandlerPlayClient;
-import net.minecraft.client.network.NetworkPlayerInfo;
+import net.minecraft.client.renderer.GlStateManager;
+import net.minecraft.client.renderer.Tessellator;
+import net.minecraft.client.renderer.WorldRenderer;
+import net.minecraft.client.renderer.vertex.DefaultVertexFormats;
+import net.minecraft.client.settings.KeyBinding;
 import net.minecraft.command.CommandBase;
 import net.minecraft.command.ICommandSender;
-import net.minecraft.entity.player.EntityPlayer;
+import net.minecraft.entity.monster.EntityEnderman;
+import net.minecraft.util.AxisAlignedBB;
+import net.minecraft.util.BlockPos;
 import net.minecraft.util.ChatComponentText;
 import net.minecraft.util.Vec3;
 import net.minecraftforge.client.ClientCommandHandler;
-import net.minecraftforge.client.event.RenderGameOverlayEvent;
 import net.minecraftforge.client.event.RenderWorldLastEvent;
 import net.minecraftforge.common.MinecraftForge;
-import net.minecraftforge.common.config.Configuration;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.common.event.FMLInitializationEvent;
-import net.minecraftforge.fml.common.event.FMLPreInitializationEvent;
 import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
 import net.minecraftforge.fml.common.gameevent.TickEvent;
-
 import org.lwjgl.opengl.GL11;
 
-import java.io.File;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.List;
+import java.util.*;
 
-@Mod(modid = AlertMod.MODID, version = AlertMod.VERSION)
-public class AlertMod {
+@Mod(modid = EndermanFinder.MODID, version = EndermanFinder.VERSION, clientSideOnly = true)
+public class EndermanFinder {
+    public static final String MODID = "endermanfinder";
+    public static final String VERSION = "1.3";
+    private static final int SEARCH_RADIUS = 150;
+    private static final double PATH_STEP = 4;
 
-    public static final String MODID = "alertmod";
-    public static final String VERSION = "1.1";
-
-    @Mod.Instance(MODID)
-    public static AlertMod instance;
-
-    private boolean alerted = false;
-    private long lastSoundPlayTime = 0;
-    private static final long SOUND_DELAY_MS = 1000;
-
-    private Configuration config;
-    private List<String> targetPlayers;
-    private List<EntityPlayer> detectedPlayers = new ArrayList<EntityPlayer>();
-    private boolean soundEnabled = true;
-    private boolean showDistances = true;
-
-    @Mod.EventHandler
-    public void preInit(FMLPreInitializationEvent event) {
-        File configFile = new File(event.getModConfigurationDirectory(), "AlertMod.cfg");
-        config = new Configuration(configFile);
-        loadConfig();
-    }
+    private boolean autoWalkEnabled = false;
+    private List<BlockPos> currentPath = new ArrayList<>();
+    private int currentPathIndex = 0;
 
     @Mod.EventHandler
     public void init(FMLInitializationEvent event) {
         MinecraftForge.EVENT_BUS.register(this);
-        ClientCommandHandler.instance.registerCommand(new AlertModCommand());
-    }
+        ClientCommandHandler.instance.registerCommand(new CommandBase() {
+            @Override
+            public String getCommandName() {
+                return "eman";
+            }
 
-    private void loadConfig() {
-        config.load();
-        String[] defaultPlayers = {};
-        String[] configPlayers = config.getStringList("targetPlayers", Configuration.CATEGORY_GENERAL, defaultPlayers,
-                "List of players to monitor");
-        targetPlayers = new ArrayList<String>(Arrays.asList(configPlayers));
-        
-        if (config.hasChanged()) {
-            config.save();
-        }
-    }
+            @Override
+            public String getCommandUsage(ICommandSender sender) {
+                return "/eman walk";
+            }
 
-    public void addUsername(String username) {
-        if (!targetPlayers.contains(username)) {
-            targetPlayers.add(username);
-            saveConfig();
-        }
-    }
-
-    public void removeUsername(String username) {
-        if (targetPlayers.remove(username)) {
-            saveConfig();
-        }
-    }
-
-    private void saveConfig() {
-        config.get(Configuration.CATEGORY_GENERAL, "targetPlayers", new String[0])
-              .set(targetPlayers.toArray(new String[targetPlayers.size()]));
-        config.save();
-    }
-
-    public List<String> getTargetPlayers() {
-        return new ArrayList<String>(targetPlayers);
-    }
-
-    public void toggleSound() {
-        soundEnabled = !soundEnabled;
-    }
-
-    public boolean isSoundEnabled() {
-        return soundEnabled;
-    }
-
-    public void toggleShowDistances() {
-        showDistances = !showDistances;
-    }
-
-    public boolean isShowDistancesEnabled() {
-        return showDistances;
-    }
-
-    @SubscribeEvent
-    public void onClientTick(TickEvent.ClientTickEvent event) {
-        if (Minecraft.getMinecraft().theWorld == null) {
-            return;
-        }
-
-        NetHandlerPlayClient netHandler = Minecraft.getMinecraft().thePlayer.sendQueue;
-        Collection<NetworkPlayerInfo> playerInfoList = netHandler.getPlayerInfoMap();
-
-        detectedPlayers.clear();
-        boolean foundTargetPlayer = false;
-
-        for (NetworkPlayerInfo playerInfo : playerInfoList) {
-            String playerName = playerInfo.getGameProfile().getName();
-
-            if (targetPlayers.contains(playerName)) {
-                foundTargetPlayer = true;
-                EntityPlayer player = Minecraft.getMinecraft().theWorld.getPlayerEntityByName(playerName);
-                if (player != null) {
-                    detectedPlayers.add(player);
-                }
-                if (!alerted) {
-                    alerted = true;
+            @Override
+            public void processCommand(ICommandSender sender, String[] args) {
+                if (args.length == 1 && args[0].equalsIgnoreCase("walk")) {
+                    autoWalkEnabled = !autoWalkEnabled;
+                    String status = autoWalkEnabled ? "enabled" : "disabled";
+                    sender.addChatMessage(new ChatComponentText("Auto-walk " + status));
                 }
             }
-        }
 
-        if (alerted && foundTargetPlayer && soundEnabled) {
-            long currentTime = System.currentTimeMillis();
-            if (currentTime - lastSoundPlayTime >= SOUND_DELAY_MS) {
-                Minecraft.getMinecraft().thePlayer.playSound("dig.glass", 1.0F, 1.0F);
-                lastSoundPlayTime = currentTime;
+            @Override
+            public int getRequiredPermissionLevel() {
+                return 0;
             }
-        } else {
-            alerted = false;
-        }
+        });
     }
 
     @SubscribeEvent
     public void onRenderWorldLast(RenderWorldLastEvent event) {
-        for (EntityPlayer player : detectedPlayers) {
-            renderPlayerESP(player, event.partialTicks);
-        }
+        Minecraft mc = Minecraft.getMinecraft();
+        if (mc.thePlayer == null || mc.theWorld == null) return;
+
+        List<EntityEnderman> endermen = findEndermen(mc);
+        if (endermen.isEmpty()) return;
+
+        EntityEnderman closestEnderman = findClosestEnderman(mc, endermen);
+        if (closestEnderman == null) return;
+
+        currentPath = findPath(mc, closestEnderman);
+        drawPath(currentPath, event.partialTicks);
     }
 
     @SubscribeEvent
-    public void onRenderGameOverlay(RenderGameOverlayEvent.Post event) {
-        if (event.type != RenderGameOverlayEvent.ElementType.TEXT || !showDistances) {
-            return;
-        }
-
-        FontRenderer fontRenderer = Minecraft.getMinecraft().fontRendererObj;
-        int y = 5;
-        for (EntityPlayer player : detectedPlayers) {
-            double distance = Minecraft.getMinecraft().thePlayer.getDistanceToEntity(player);
-            String text = String.format("%s: %.1f blocks", player.getName(), distance);
-            fontRenderer.drawStringWithShadow(text, 5, y, 0x00FFFF); // Cyan color
-            y += fontRenderer.FONT_HEIGHT + 2;
-        }
-    }
-
-    private void renderPlayerESP(EntityPlayer player, float partialTicks) {
-        Minecraft mc = Minecraft.getMinecraft();
-        
-        double renderPosX = mc.getRenderManager().viewerPosX;
-        double renderPosY = mc.getRenderManager().viewerPosY;
-        double renderPosZ = mc.getRenderManager().viewerPosZ;
-
-        double x = player.lastTickPosX + (player.posX - player.lastTickPosX) * partialTicks - renderPosX;
-        double y = player.lastTickPosY + (player.posY - player.lastTickPosY) * partialTicks - renderPosY;
-        double z = player.lastTickPosZ + (player.posZ - player.lastTickPosZ) * partialTicks - renderPosZ;
-
-        GL11.glPushMatrix();
-        GL11.glDisable(GL11.GL_TEXTURE_2D);
-        GL11.glDisable(GL11.GL_DEPTH_TEST);
-        GL11.glDepthMask(false);
-        GL11.glLineWidth(2.0F);
-        GL11.glColor4f(0.0F, 1.0F, 1.0F, 1.0F);  // Cyan color
-
-        GL11.glBegin(GL11.GL_LINES);
-        GL11.glVertex3d(x - 0.5, y, z - 0.5);
-        GL11.glVertex3d(x - 0.5, y + 2, z - 0.5);
-        GL11.glVertex3d(x + 0.5, y, z - 0.5);
-        GL11.glVertex3d(x + 0.5, y + 2, z - 0.5);
-        GL11.glVertex3d(x + 0.5, y, z + 0.5);
-        GL11.glVertex3d(x + 0.5, y + 2, z + 0.5);
-        GL11.glVertex3d(x - 0.5, y, z + 0.5);
-        GL11.glVertex3d(x - 0.5, y + 2, z + 0.5);
-        GL11.glEnd();
-
-        GL11.glBegin(GL11.GL_QUADS);
-        GL11.glVertex3d(x - 0.5, y, z - 0.5);
-        GL11.glVertex3d(x - 0.5, y, z + 0.5);
-        GL11.glVertex3d(x + 0.5, y, z + 0.5);
-        GL11.glVertex3d(x + 0.5, y, z - 0.5);
-        GL11.glVertex3d(x - 0.5, y + 2, z - 0.5);
-        GL11.glVertex3d(x + 0.5, y + 2, z - 0.5);
-        GL11.glVertex3d(x + 0.5, y + 2, z + 0.5);
-        GL11.glVertex3d(x - 0.5, y + 2, z + 0.5);
-        GL11.glEnd();
-
-        GL11.glEnable(GL11.GL_TEXTURE_2D);
-        GL11.glEnable(GL11.GL_DEPTH_TEST);
-        GL11.glDepthMask(true);
-        GL11.glPopMatrix();
-    }
-}
-
-class AlertModCommand extends CommandBase {
-    @Override
-    public String getCommandName() {
-        return "alertmod";
-    }
-
-    @Override
-    public String getCommandUsage(ICommandSender sender) {
-        return "/alertmod <add|remove|list|find|sound|show> [username]";
-    }
-
-    @Override
-    public void processCommand(ICommandSender sender, String[] args) {
-        if (args.length == 0) {
-            sender.addChatMessage(new ChatComponentText("Usage: " + getCommandUsage(sender)));
-            return;
-        }
-
-        if ("add".equalsIgnoreCase(args[0])) {
-            if (args.length < 2) {
-                sender.addChatMessage(new ChatComponentText("Please specify a username to add."));
-            } else {
-                AlertMod.instance.addUsername(args[1]);
-                sender.addChatMessage(new ChatComponentText("Added username: " + args[1]));
-            }
-        } else if ("remove".equalsIgnoreCase(args[0])) {
-            if (args.length < 2) {
-                sender.addChatMessage(new ChatComponentText("Please specify a username to remove."));
-            } else {
-                AlertMod.instance.removeUsername(args[1]);
-                sender.addChatMessage(new ChatComponentText("Removed username: " + args[1]));
-            }
-        } else if ("list".equalsIgnoreCase(args[0])) {
-            List<String> players = AlertMod.instance.getTargetPlayers();
-            if (players.isEmpty()) {
-                sender.addChatMessage(new ChatComponentText("No usernames in the list."));
-            } else {
-                sender.addChatMessage(new ChatComponentText("Current usernames:"));
-                for (String player : players) {
-                    sender.addChatMessage(new ChatComponentText("- " + player));
-                }
-            }
-        } else if ("find".equalsIgnoreCase(args[0])) {
-            if (args.length < 2) {
-                sender.addChatMessage(new ChatComponentText("Please specify a username to find."));
-            } else {
-                EntityPlayer player = Minecraft.getMinecraft().theWorld.getPlayerEntityByName(args[1]);
-                if (player != null) {
-                    Vec3 pos = player.getPositionVector();
-                    sender.addChatMessage(new ChatComponentText(String.format("%s is at X: %.2f, Y: %.2f, Z: %.2f", 
-                        args[1], pos.xCoord, pos.yCoord, pos.zCoord)));
+    public void onClientTick(TickEvent.ClientTickEvent event) {
+        if (event.phase == TickEvent.Phase.START && autoWalkEnabled) {
+            Minecraft mc = Minecraft.getMinecraft();
+            if (mc.thePlayer != null && !currentPath.isEmpty()) {
+                if (currentPathIndex < currentPath.size()) {
+                    BlockPos nextPoint = currentPath.get(currentPathIndex);
+                    moveTowards(mc, nextPoint);
                 } else {
-                    sender.addChatMessage(new ChatComponentText("Player not found: " + args[1]));
+                    currentPathIndex = 0;
                 }
             }
-        } else if ("sound".equalsIgnoreCase(args[0])) {
-            AlertMod.instance.toggleSound();
-            sender.addChatMessage(new ChatComponentText("Sound alert " + 
-                (AlertMod.instance.isSoundEnabled() ? "enabled" : "disabled")));
-        } else if ("show".equalsIgnoreCase(args[0])) {
-            AlertMod.instance.toggleShowDistances();
-            sender.addChatMessage(new ChatComponentText("Distance display " + 
-                (AlertMod.instance.isShowDistancesEnabled() ? "enabled" : "disabled")));
-        } else {
-            sender.addChatMessage(new ChatComponentText("Unknown subcommand. Use 'add', 'remove', 'list', 'find', 'sound', or 'show'."));
         }
     }
 
-    @Override
-    public int getRequiredPermissionLevel() {
-        return 0;
+    private void moveTowards(Minecraft mc, BlockPos target) {
+        double dx = target.getX() + 0.5 - mc.thePlayer.posX;
+        double dy = target.getY() + 0.1 - mc.thePlayer.posY;
+        double dz = target.getZ() + 0.5 - mc.thePlayer.posZ;
+        double distSq = dx * dx + dy * dy + dz * dz;
+
+        if (distSq < 0.1) {
+            currentPathIndex++;
+            return;
+        }
+
+        // Calculate target yaw
+        float targetYaw = (float) Math.toDegrees(Math.atan2(-dx, dz));
+
+        // Smooth rotation
+        float yawDiff = targetYaw - mc.thePlayer.rotationYaw;
+        while (yawDiff > 180) yawDiff -= 360;
+        while (yawDiff < -180) yawDiff += 360;
+        mc.thePlayer.rotationYaw += yawDiff * 0.2f;
+
+        // Keep pitch level
+        mc.thePlayer.rotationPitch = 0;
+
+        // Movement
+        KeyBinding.setKeyBindState(mc.gameSettings.keyBindForward.getKeyCode(), true);
+
+        // Jump if needed
+        if (isJumpNeeded(mc)) {
+            KeyBinding.setKeyBindState(mc.gameSettings.keyBindJump.getKeyCode(), true);
+        } else {
+            KeyBinding.setKeyBindState(mc.gameSettings.keyBindJump.getKeyCode(), false);
+        }
+    }
+
+    private List<BlockPos> smoothPath(Minecraft mc, List<BlockPos> path) {
+        if (path.size() < 3) return path;
+    
+        List<BlockPos> smoothed = new ArrayList<>();
+        smoothed.add(path.get(0));
+    
+        for (int i = 1; i < path.size() - 1; i++) {
+            BlockPos prev = path.get(i - 1);
+            BlockPos current = path.get(i);
+            BlockPos next = path.get(i + 1);
+    
+            if (canMoveDiagonally(mc, prev, next)) {
+                // Skip the current point if we can move diagonally
+                continue;
+            }
+    
+            smoothed.add(current);
+        }
+    
+        smoothed.add(path.get(path.size() - 1));
+        return smoothed;
+    }
+    
+    private boolean canMoveDiagonally(Minecraft mc, BlockPos start, BlockPos end) {
+        BlockPos diff = end.subtract(start);
+        BlockPos middle = start.add(diff.getX(), 0, diff.getZ());
+        return isWalkable(mc, middle) && isWalkable(mc, middle.up());
+    }
+
+    private boolean isJumpNeeded(Minecraft mc) {
+        BlockPos pos = new BlockPos(mc.thePlayer.posX, mc.thePlayer.posY, mc.thePlayer.posZ);
+        return !mc.theWorld.isAirBlock(pos.offset(mc.thePlayer.getHorizontalFacing())) ||
+               !mc.theWorld.isAirBlock(pos.offset(mc.thePlayer.getHorizontalFacing()).up());
+    }
+
+    private List<EntityEnderman> findEndermen(Minecraft mc) {
+        List<EntityEnderman> endermen = new ArrayList<>();
+        BlockPos playerPos = mc.thePlayer.getPosition();
+        for (Object entity : mc.theWorld.loadedEntityList) {
+            if (entity instanceof EntityEnderman) {
+                EntityEnderman enderman = (EntityEnderman) entity;
+                if (enderman.getDistanceSq(playerPos) <= SEARCH_RADIUS * SEARCH_RADIUS) {
+                    endermen.add(enderman);
+                }
+            }
+        }
+        return endermen;
+    }
+
+    private EntityEnderman findClosestEnderman(Minecraft mc, List<EntityEnderman> endermen) {
+        return endermen.stream()
+                .min(Comparator.comparingDouble(e -> e.getDistanceSqToEntity(mc.thePlayer)))
+                .orElse(null);
+    }
+
+    private List<BlockPos> findPath(Minecraft mc, EntityEnderman enderman) {
+        BlockPos start = mc.thePlayer.getPosition();
+        BlockPos end = enderman.getPosition();
+    
+        System.out.println("Start: " + start + ", End: " + end); // Debug statement
+    
+        PriorityQueue<Node> openSet = new PriorityQueue<>();
+        Map<BlockPos, Node> allNodes = new HashMap<>();
+    
+        Node startNode = new Node(start, null, 0, start.distanceSq(end));
+        openSet.add(startNode);
+        allNodes.put(start, startNode);
+    
+        while (!openSet.isEmpty()) {
+            Node current = openSet.poll();
+            if (current.pos.distanceSq(end) <= 2) {  // Allow getting close to the enderman
+                List<BlockPos> rawPath = reconstructPath(current);
+                return smoothPath(mc, rawPath);
+            }
+    
+            for (BlockPos neighbor : getNeighbors(current.pos)) {
+                if (!isWalkable(mc, neighbor)) continue;
+                
+                double newG = current.g + current.pos.distanceSq(neighbor);
+                Node neighborNode = allNodes.get(neighbor);
+                
+                if (neighborNode == null) {
+                    neighborNode = new Node(neighbor, current, newG, heuristic(neighbor, end));
+                    allNodes.put(neighbor, neighborNode);
+                    openSet.add(neighborNode);
+                } else if (newG < neighborNode.g) {
+                    neighborNode.parent = current;
+                    neighborNode.g = newG;
+                    neighborNode.f = newG + heuristic(neighbor, end);
+                    openSet.remove(neighborNode);
+                    openSet.add(neighborNode);
+                }
+            }
+        }
+    
+        return new ArrayList<>(); // No path found
+    }
+
+    private double heuristic(BlockPos a, BlockPos b) {
+        return Math.sqrt(a.distanceSq(b));
+    }
+
+    private List<BlockPos> reconstructPath(Node endNode) {
+        List<BlockPos> path = new ArrayList<>();
+        Node current = endNode;
+        while (current != null) {
+            path.add(current.pos);
+            current = current.parent;
+        }
+        Collections.reverse(path);
+        return path;
+    }
+
+    private List<BlockPos> getNeighbors(BlockPos pos) {
+        List<BlockPos> neighbors = new ArrayList<>();
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                for (int dy = -1; dy <= 1; dy++) {
+                    if (dx == 0 && dy == 0 && dz == 0) continue;
+                    neighbors.add(pos.add(dx, dy, dz));
+                }
+            }
+        }
+        return neighbors;
+    }
+
+    private boolean isWalkable(Minecraft mc, BlockPos pos) {
+        return mc.theWorld.isAirBlock(pos) && 
+               mc.theWorld.isAirBlock(pos.up()) && 
+               (mc.theWorld.getBlockState(pos.down()).getBlock().isBlockNormalCube() ||
+                mc.theWorld.getBlockState(pos.down()).getBlock().isOpaqueCube());
+    }
+
+
+    private void drawPath(List<BlockPos> path, float partialTicks) {
+        if (path.isEmpty()) return;
+
+        Minecraft mc = Minecraft.getMinecraft();
+        double playerX = mc.thePlayer.lastTickPosX + (mc.thePlayer.posX - mc.thePlayer.lastTickPosX) * partialTicks;
+        double playerY = mc.thePlayer.lastTickPosY + (mc.thePlayer.posY - mc.thePlayer.lastTickPosY) * partialTicks;
+        double playerZ = mc.thePlayer.lastTickPosZ + (mc.thePlayer.posZ - mc.thePlayer.lastTickPosZ) * partialTicks;
+
+        GlStateManager.pushMatrix();
+        GlStateManager.translate(-playerX, -playerY, -playerZ);
+        GlStateManager.disableTexture2D();
+        GlStateManager.disableDepth();
+        GlStateManager.disableLighting();
+        GlStateManager.enableBlend();
+        GlStateManager.blendFunc(GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA);
+
+        // Draw the path line
+        Tessellator tessellator = Tessellator.getInstance();
+        WorldRenderer worldrenderer = tessellator.getWorldRenderer();
+        worldrenderer.begin(GL11.GL_LINE_STRIP, DefaultVertexFormats.POSITION_COLOR);
+
+        for (BlockPos point : path) {
+            worldrenderer.pos(point.getX() + 0.5, point.getY() + 0.1, point.getZ() + 0.5)
+                        .color(1.0f, 1.0f, 0.0f, 1.0f).endVertex();
+        }
+
+        tessellator.draw();
+
+        // Draw small cubes at each path point
+        for (BlockPos point : path) {
+            drawCube(new Vec3(point.getX() + 0.5, point.getY() + 0.1, point.getZ() + 0.5), 0.1f, 1.0f, 0.0f, 0.0f, 1.0f);
+        }
+
+        GlStateManager.disableBlend();
+        GlStateManager.enableLighting();
+        GlStateManager.enableDepth();
+        GlStateManager.enableTexture2D();
+        GlStateManager.popMatrix();
+    }
+
+    private void drawSphere(Vec3 center, float radius, float r, float g, float b, float a) {
+        Tessellator tessellator = Tessellator.getInstance();
+        WorldRenderer worldrenderer = tessellator.getWorldRenderer();
+        worldrenderer.begin(GL11.GL_TRIANGLE_FAN, DefaultVertexFormats.POSITION_COLOR);
+
+        for (int i = 0; i <= 18; i++) {
+            double lat = Math.PI * (double) (i - 9) / 18.0;
+            for (int j = 0; j <= 18; j++) {
+                double lon = 2 * Math.PI * (double) j / 18.0;
+                double x = Math.cos(lat) * Math.cos(lon);
+                double y = Math.sin(lat);
+                double z = Math.cos(lat) * Math.sin(lon);
+                worldrenderer.pos(center.xCoord + x * radius, center.yCoord + y * radius, center.zCoord + z * radius).color(r, g, b, a).endVertex();
+            }
+        }
+
+        tessellator.draw();
+    }
+
+    private void drawCube(Vec3 center, float size, float r, float g, float b, float a) {
+        float halfSize = size / 2;
+        Tessellator tessellator = Tessellator.getInstance();
+        WorldRenderer worldrenderer = tessellator.getWorldRenderer();
+        worldrenderer.begin(GL11.GL_QUADS, DefaultVertexFormats.POSITION_COLOR);
+    
+        // Bottom face
+        worldrenderer.pos(center.xCoord - halfSize, center.yCoord - halfSize, center.zCoord - halfSize).color(r, g, b, a).endVertex();
+        worldrenderer.pos(center.xCoord + halfSize, center.yCoord - halfSize, center.zCoord - halfSize).color(r, g, b, a).endVertex();
+        worldrenderer.pos(center.xCoord + halfSize, center.yCoord - halfSize, center.zCoord + halfSize).color(r, g, b, a).endVertex();
+        worldrenderer.pos(center.xCoord - halfSize, center.yCoord - halfSize, center.zCoord + halfSize).color(r, g, b, a).endVertex();
+    
+        // Top face
+        worldrenderer.pos(center.xCoord - halfSize, center.yCoord + halfSize, center.zCoord - halfSize).color(r, g, b, a).endVertex();
+        worldrenderer.pos(center.xCoord + halfSize, center.yCoord + halfSize, center.zCoord - halfSize).color(r, g, b, a).endVertex();
+        worldrenderer.pos(center.xCoord + halfSize, center.yCoord + halfSize, center.zCoord + halfSize).color(r, g, b, a).endVertex();
+        worldrenderer.pos(center.xCoord - halfSize, center.yCoord + halfSize, center.zCoord + halfSize).color(r, g, b, a).endVertex();
+    
+        // Front face
+        worldrenderer.pos(center.xCoord - halfSize, center.yCoord - halfSize, center.zCoord + halfSize).color(r, g, b, a).endVertex();
+        worldrenderer.pos(center.xCoord + halfSize, center.yCoord - halfSize, center.zCoord + halfSize).color(r, g, b, a).endVertex();
+        worldrenderer.pos(center.xCoord + halfSize, center.yCoord + halfSize, center.zCoord + halfSize).color(r, g, b, a).endVertex();
+        worldrenderer.pos(center.xCoord - halfSize, center.yCoord + halfSize, center.zCoord + halfSize).color(r, g, b, a).endVertex();
+    
+        // Back face
+        worldrenderer.pos(center.xCoord - halfSize, center.yCoord - halfSize, center.zCoord - halfSize).color(r, g, b, a).endVertex();
+        worldrenderer.pos(center.xCoord + halfSize, center.yCoord - halfSize, center.zCoord - halfSize).color(r, g, b, a).endVertex();
+        worldrenderer.pos(center.xCoord + halfSize, center.yCoord + halfSize, center.zCoord - halfSize).color(r, g, b, a).endVertex();
+        worldrenderer.pos(center.xCoord - halfSize, center.yCoord + halfSize, center.zCoord - halfSize).color(r, g, b, a).endVertex();
+    
+        // Left face
+        worldrenderer.pos(center.xCoord - halfSize, center.yCoord - halfSize, center.zCoord - halfSize).color(r, g, b, a).endVertex();
+        worldrenderer.pos(center.xCoord - halfSize, center.yCoord - halfSize, center.zCoord + halfSize).color(r, g, b, a).endVertex();
+        worldrenderer.pos(center.xCoord - halfSize, center.yCoord + halfSize, center.zCoord + halfSize).color(r, g, b, a).endVertex();
+        worldrenderer.pos(center.xCoord - halfSize, center.yCoord + halfSize, center.zCoord - halfSize).color(r, g, b, a).endVertex();
+    
+        // Right face
+        worldrenderer.pos(center.xCoord + halfSize, center.yCoord - halfSize, center.zCoord - halfSize).color(r, g, b, a).endVertex();
+        worldrenderer.pos(center.xCoord + halfSize, center.yCoord - halfSize, center.zCoord + halfSize).color(r, g, b, a).endVertex();
+        worldrenderer.pos(center.xCoord + halfSize, center.yCoord + halfSize, center.zCoord + halfSize).color(r, g, b, a).endVertex();
+        worldrenderer.pos(center.xCoord + halfSize, center.yCoord + halfSize, center.zCoord - halfSize).color(r, g, b, a).endVertex();
+    
+        tessellator.draw();
+    }
+
+    private void drawBoundingBox(AxisAlignedBB bb, float red, float green, float blue, float alpha) {
+        Tessellator tessellator = Tessellator.getInstance();
+        WorldRenderer worldrenderer = tessellator.getWorldRenderer();
+        worldrenderer.begin(GL11.GL_QUADS, DefaultVertexFormats.POSITION_COLOR);
+
+        worldrenderer.pos(bb.minX, bb.minY, bb.minZ).color(red, green, blue, alpha).endVertex();
+        worldrenderer.pos(bb.maxX, bb.minY, bb.minZ).color(red, green, blue, alpha).endVertex();
+        worldrenderer.pos(bb.maxX, bb.minY, bb.maxZ).color(red, green, blue, alpha).endVertex();
+        worldrenderer.pos(bb.minX, bb.minY, bb.maxZ).color(red, green, blue, alpha).endVertex();
+
+        worldrenderer.pos(bb.minX, bb.maxY, bb.minZ).color(red, green, blue, alpha).endVertex();
+        worldrenderer.pos(bb.maxX, bb.maxY, bb.minZ).color(red, green, blue, alpha).endVertex();
+        worldrenderer.pos(bb.maxX, bb.maxY, bb.maxZ).color(red, green, blue, alpha).endVertex();
+        worldrenderer.pos(bb.minX, bb.maxY, bb.maxZ).color(red, green, blue, alpha).endVertex();
+
+        worldrenderer.pos(bb.minX, bb.minY, bb.minZ).color(red, green, blue, alpha).endVertex();
+        worldrenderer.pos(bb.minX, bb.maxY, bb.minZ).color(red, green, blue, alpha).endVertex();
+        worldrenderer.pos(bb.maxX, bb.minY, bb.minZ).color(red, green, blue, alpha).endVertex();
+        worldrenderer.pos(bb.maxX, bb.maxY, bb.minZ).color(red, green, blue, alpha).endVertex();
+
+        worldrenderer.pos(bb.maxX, bb.minY, bb.maxZ).color(red, green, blue, alpha).endVertex();
+        worldrenderer.pos(bb.maxX, bb.maxY, bb.maxZ).color(red, green, blue, alpha).endVertex();
+        worldrenderer.pos(bb.minX, bb.minY, bb.maxZ).color(red, green, blue, alpha).endVertex();
+        worldrenderer.pos(bb.minX, bb.maxY, bb.maxZ).color(red, green, blue, alpha).endVertex();
+
+        tessellator.draw();
+    }
+
+    private static class Node implements Comparable<Node> {
+        BlockPos pos;
+        Node parent;
+        double g, f;
+
+        Node(BlockPos pos, Node parent, double g, double h) {
+            this.pos = pos;
+            this.parent = parent;
+            this.g = g;
+            this.f = g + h;
+        }
+
+        @Override
+        public int compareTo(Node other) {
+            return Double.compare(this.f, other.f);
+        }
     }
 }
