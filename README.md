@@ -1,5 +1,5 @@
 
-- ⚡ Fun fact: no fun here
+- ⚡ trust no one
 
 <!---
 leopardbyte/leopardbyte is a ✨ special ✨ repository because its `README.md` (this file) appears on your GitHub profile.
